@@ -1,16 +1,21 @@
+from typing import Optional
 from markdownify import markdownify
+
+from rubigram.bot.enums import ParseMode
 from .markdown import Markdown
 
 
 class Parser:
-    @staticmethod
-    def parse(text: str, parse_mode: str):
-        if parse_mode.lower() == "markdown":
-            return Markdown.parse(text)
+    def __init__(
+        self,
+        parse_mode: "ParseMode" = ParseMode.MARKDOWN
+    ):
+        self.parse_mode = parse_mode
 
-        elif parse_mode.lower() == "html":
-            text = markdownify(text)
-            return Markdown.parse(text)
+    def parse(self, text: str, parse_mode: Optional["ParseMode"] = None):
+        mode = parse_mode or self.parse_mode
 
-        else:
-            return text, None
+        if mode == ParseMode.HTML:
+            text = markdownify(html=text)
+
+        return Markdown.parse(text)

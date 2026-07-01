@@ -1,83 +1,91 @@
-from __future__ import annotations
+# #  RubigramClient - Rubika API library for python
+# #  Copyright (C) 2025-present Javad <https://github.com/DevJavad>
+# #  Github - https://github.com/DevJavad/rubigram
 
-from rubigram.filters import Filter
+
+import inspect
 from typing import Callable, Optional
+
+# import rubigram
+# from rubigram.types import Update
+from rubigram.filters import Filter
+
+
+# class Handler:
+#     def __init__(self, callback: Callable, filters: Optional["Filter"] = None):
+#         self.callback = callback
+#         self.filters = filters
+
+#     async def execute(self, client: "rubigram.Client", update: Optional[Update] = None):
+#         if self.filters is None:
+#             await self.callback(client, update)
+#             return True
+
+#         if callable(self.filters):
+#             if inspect.iscoroutinefunction(self.filters.__call__):
+#                 result = await self.filters(client, update)
+#             else:
+#                 result = self.filters(client, update)
+
+#             if result:
+#                 await self.callback(client, update)
+#                 return True
+
+#             return False
+
+
+import asyncio
+import inspect
+from typing import Optional
+
+import rubigram
+from rubigram.types import Update
 
 
 class Handler:
-    """
-    Initialize a new handler.
-
-    Parameters:
-        callback (Callable):
-            Async function to call when handler is triggered.
-            Function signature: async def callback(client: rubigram.Client, update)
-
-        filters (Optional[Filter], default: None):
-            Optional filters to apply before executing the callback.
-            If provided, the handler only runs if filters pass.
-
-    Example:
-        # Create a handler that only responds to messages containing "help"
-        from rubigram.filters import command
-
-        async def help_handler(client, update):
-            await update.reply("Here is some help...")
-
-        handler = Handler(
-            callback=help_handler,
-            filters=command("help")
-        )
-    """
-
-    def __init__(
-        self,
-        callback: Callable,
-        filters: Optional[Filter] = None
-    ):
+    def __init__(self, callback: Callable, filters: Optional["Filter"] = None):
         self.callback = callback
         self.filters = filters
 
-    async def check(self, client, update) -> bool:
-        """
-        Check if the handler should run for a given update.
+    async def check(self, client: "rubigram.Client", update: Update):
+        if inspect.iscoroutinefunction(self.filters.__call__):
+            return await self.filters(client, update)
+        else:
+            return await client.loop.run_in_executor(
+                client.executor,
+                self.filters,
+                client, update
+            )
 
-        Parameters:
-            client (rubigram.Client):
-                The bot client instance.
+    async def execute(self, client: "rubigram.Client", update: Optional[Update] = None):
+        if self.filters is None or await self.check(client, update):
+            if inspect.iscoroutinefunction(self.callback):
+                return await self.callback(client, update)
+            else:
+                return await asyncio.to_thread(self.callback, client, update)
 
-            update:
-                The update object to check.
+    # async def execute(self, client: "rubigram.Client", update: Optional[Update] = None):
 
-        Returns:
-            bool:
-                True if the handler should run (filters pass or no filters),
-                False otherwise.
+    #     if self.filters is None:
+    #         if inspect.iscoroutinefunction(self.callback):
+    #             await self.callback(client, update)
+    #         else:
+    #             await asyncio.to_thread(self.callback, client, update)
+    #         return True
 
-        Note:
-            - If no filters are set, returns True (handler always runs)
-            - If filters are set, returns result of filter evaluation
-            - Filters are evaluated asynchronously
-        """
+    #     if callable(self.filters):
+    #         if inspect.iscoroutinefunction(self.filters):
+    #             result = await self.filters(client, update)
+    #         else:
+    #             result = await asyncio.to_thread(self.filters, client, update)
 
-        if self.filters is None:
-            return True
-        return await self.filters(client, update)
+    #         if result:
+    #             if inspect.iscoroutinefunction(self.callback):
+    #                 await self.callback(client, update)
+    #             else:
+    #                 await asyncio.to_thread(self.callback, client, update)
+    #             return True
 
-    async def run(self, client, update):
-        """
-        Execute the handler's callback.
+    #         return False
 
-        Parameters:
-            client (rubigram.Client):
-                The bot client instance.
-
-            update:
-                The update object to process.
-
-        Note:
-            - Only called if check() returns True
-            - Executes the registered callback function
-            - Should handle any exceptions within the callback
-        """
-        await self.callback(client, update)
+    #     return False

@@ -1,224 +1,441 @@
-#  RubigramClient - Rubika API library for python
-#  Copyright (C) 2025-present Javad <https://github.com/DevJavad>
-#  Github - https://github.com/DevJavad/rubigram
-
-
-from __future__ import annotations
-
-from typing import Optional, Callable, Union
-from .enums import ParseMode
-from .methods import Methods
-from .state import Storage, State
-from .dispatcher import Dispatcher
-from .http_session import HttpSession
+import os
 import logging
+import asyncio
+
+from pathlib import Path
+from random import randint
+from aiohttp import ClientSession
+from typing import Optional, Union
+from importlib import import_module
+from asyncio import AbstractEventLoop
+from concurrent.futures.thread import ThreadPoolExecutor as Executor
+
+from rubigram.ask import AskMixin
+from rubigram.utils import ainput
+from rubigram import utils, enums, types, errors, handlers
+
+
+from .connection import Connection
+from .dispatcher import Dispatcher
+from .handlers import Handler
+from .methods import Methods
+from .server import Server
+from .crypto import Crypto
+from .parser import Parser
+from .storage import Storage
+from .filters import Filter
 
 
 logger = logging.getLogger(__name__)
 
 
 class Client(Methods):
-    """
-    Initialize a new Rubika bot client.
 
-    Parameters:
-        token (str):
-            Your bot's authentication token from @RubikaBot.
+    WORKERS: int = min(32, (os.cpu_count() or 0) + 4)
+    DEVICE_MODEL: str = "Rubigram"
 
-        offset_id (Optional[str], default: None):
-            Starting point for update polling. Useful for resuming from
-            a specific update after restart.
+    WSS_URL: str = "wss://nsocket11.iranlms.ir:80"
+    API_URL: str = "https://messengerg2c%s.iranlms.ir/" % randint(1, 69)
+    API_URL = "https://messengerg2c23.iranlms.ir"
 
-        storage (Optional[Storage], default: None):
-            Custom storage implementation for user states.
-            If None, uses default in-memory storage.
+    WEB_USER_AGENT = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/102.0.0.0 Safari/537.36"
+    )
 
-        timeout (Union[int, float], default: 10.0):
-            Total timeout for API requests in seconds.
+    WEB_HEADERS: dict[str, str] = {
+        "origin": "https://m.rubika.ir",
+        "referer": "https://m.rubika.ir/",
+        "content-type": "application/json",
+        "connection": "keep-alive",
+        "user-agent": WEB_USER_AGENT
+    }
 
-        connect_timeout (Union[int, float], default: 30.0):
-            Timeout for establishing connections in seconds.
+    # ANDROID_HEADERS: dict[str, str] = {
+    #     "Content-Type": "application/json; charset=utf-8",
+    #     "Accept-Encoding": "gzip",
+    #     "User-Agent": "okhttp/3.12.12"
 
-        read_timeout (Union[int, float], default: 50.0):
-            Timeout for reading response data in seconds.
+    # }
 
-        retries (int, default: 3):
-            Number of automatic retries for failed requests.
+    ANDROID_HEADERS: dict[str, str] = {
+        "content-type": "application/json",
+        "connection": "keep-alive",
+        "user-agent": "okhttp/3.12.1"
+    }
 
-        backoff (Union[int, float], default: 0.5):
-            Multiplier applied to delay after each retry.
+    PWA_CLIENT: dict[str, str] = {
+        "app_name": "Main",
+        "app_version": "2.4.6",
+        "platform": "PWA",
+        "package": "m.rubika.ir",
+    }
 
-        max_delay (Union[int, float], default: 3):
-            Maximum delay between retries in seconds.
+    WEB_CLIENT: dict[str, str] = {
+        "app_name": "Main",
+        "app_version": "4.4.29",
+        "platform": "Web",
+        "package": "web.rubika.ir",
+        "lang_code": "fa"
+    }
 
-        delay (Union[int, float], default: 1):
-            Initial delay between retries in seconds.
-
-        max_connections (int, default: 100):
-            Maximum number of concurrent HTTP connections.
-
-        proxy (Optional[str], default: None):
-            Proxy URL for requests (e.g., "http://proxy.example.com:8080").
-
-        parse_mode (Union[str, ParseMode], default: ParseMode.MARKDOWN):
-            Default text formatting mode. Can be "Markdown", "HTML", or enum.
-
-    Example:
-        # Full-featured client setup
-        client = Client(
-            token="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
-            offset_id="update_123456",
-            timeout=30.0,
-            connect_timeout=10.0,
-            read_timeout=20.0,
-            retries=5,
-            delay=2.0,
-            backoff=1.5,
-            max_delay=10.0,
-            max_connections=50,
-            proxy="http://corporate-proxy:3128",
-            parse_mode="HTML"
-        )
-    """
+    ANDROID_CLIENT: dict[str, str] = {
+        "app_name": "Main",
+        "app_version": "3.8.2",
+        "lang_code": "fa",
+        "package": "app.rbmain.a",
+        "temp_code": "25",
+        "platform": "Android"
+    }
 
     def __init__(
         self,
-        token: str,
-        offset_id: Optional[str] = None,
-        storage: Optional[Storage] = None,
-        timeout: Union[int, float] = 10.0,
-        connect_timeout: Union[int, float] = 30.0,
-        read_timeout: Union[int, float] = 50.0,
-        retries: int = 3,
-        backoff: Union[int, float] = 0.5,
-        max_delay: Union[int, float] = 3,
-        delay: Union[int, float] = 1,
+        name: Optional[str] = None,
+        auth: Optional[str] = None,
+        private_key: Optional[str] = None,
+
+        phone_number: Optional[str] = None,
+        password: Optional[str] = None,
+        hide_password: bool = False,
+        device_model: str = DEVICE_MODEL,
+        user_agent: Optional[str] = None,
+        lang_code: str = "fa",
+        auto_delete: Optional[int] = None,
+
+        run_type: "enums.RunType" = enums.RunType.WebSocket,
+
+        format_private_key: bool = True,
+
+        platform: enums.Platform = enums.Platform.WEB,
+        parse_mode: enums.ParseMode = enums.ParseMode.MARKDOWN,
+
         max_connections: int = 100,
+
+        timeout: float = 20,
+        connect_timeout: float = 20,
+        socket_read_timeout: float = 20,
+
+        retry: int = 3,
+        delay: Union[int, float] = 1,
+        backoff: Union[int, float] = 0.5,
+
         proxy: Optional[str] = None,
-        parse_mode: Union[str, ParseMode] = ParseMode.MARKDOWN,
-        auto_delete: Optional[int] = None
+        headers: Optional[dict] = None,
+
+        plugins: Optional[dict] = None,
+
+        workers: int = WORKERS,
+        loop: Optional[AbstractEventLoop] = None,
+
+        http_session: Optional[ClientSession] = None,
+        connection: Optional[Connection] = None
     ):
-        self.token = token
-        self.offset_id = offset_id
-        self.storage = storage or Storage()
-        self.timeout = timeout
-        self.connect_timeout = connect_timeout
-        self.read_timeout = read_timeout
-        self.retries = retries
-        self.backoff = backoff
-        self.max_delay = max_delay
-        self.delay = delay
-        self.max_connections = max_connections
-        self.proxy = proxy
-        self.parse_mode = parse_mode
+        self.name = name
+        self.auth = auth
+        self.private_key = private_key
+
+        self.phone_number = phone_number
+        self.password = password
+        self.hide_password = hide_password
+        self.device_model = device_model
+        self.user_agent = user_agent
+        self.lang_code = lang_code
         self.auto_delete = auto_delete
 
-        self.dispatcher = Dispatcher(self)
-        self.http = HttpSession(
-            timeout,
-            connect_timeout,
-            read_timeout,
-            max_connections
+        self.run_type = run_type
+
+        self.format_private_key = format_private_key
+
+        self.platform = platform
+        self.parse_mode = parse_mode
+
+        self.max_connections = max_connections
+
+        self.timeout = timeout
+        self.connect_timeout = connect_timeout
+        self.socket_read_timeout = socket_read_timeout
+
+        self.retry = retry
+        self.delay = delay
+        self.backoff = backoff
+
+        self.proxy = proxy
+        self.headers = headers
+
+        self.plugins = plugins
+        self.workers = workers
+        self.semaphore = asyncio.Semaphore(self.workers)
+
+        if platform == enums.Platform.WEB:
+            self.client_info = self.WEB_CLIENT
+            if self.headers is None:
+                self.headers = self.WEB_HEADERS
+
+        elif platform == enums.Platform.ANDROID:
+            self.client_info = self.ANDROID_CLIENT
+            if self.headers is None:
+                self.headers = self.ANDROID_HEADERS
+
+        elif platform == enums.Platform.PWA:
+            self.client_info = self.PWA_CLIENT
+            if self.headers is None:
+                self.headers = self.WEB_HEADERS
+
+        if isinstance(loop, AbstractEventLoop):
+            self.loop = loop
+        else:
+            self.loop = utils.get_event_loop()
+
+        if auth and private_key:
+            self.crypto = Crypto(auth, private_key)
+        else:
+            self.crypto = None
+
+        self.sequential_handlers = False
+
+        self.parser = Parser(parse_mode)
+
+        if isinstance(http_session, ClientSession):
+            self.http_session = http_session
+        else:
+            self.connection = Connection(
+                timeout, connect_timeout, max_connections, socket_read_timeout
+            )
+            self.http_session = self.connection.http_session
+            
+        self.server = Server(
+            self.connection, retry, delay, backoff, proxy, headers
         )
 
-        self.stop_handlers: list[Callable] = []
-        self.start_handlers: list[Callable] = []
-        self.api: str = f"https://botapi.rubika.ir/v3/{token}/"
+        self.executor = Executor(workers, thread_name_prefix="Handler")
 
-        super().__init__()
+        self.storage = Storage()
+        self.me: Optional["types.User"] = None
+        self.guid: Optional[str] = None
 
-    def state(self, user_id: str):
-        """
-        Get state manager for a specific user.
+        self.dispatcher = Dispatcher(self)
 
-        Parameters:
-            user_id (str):
-                The user ID to manage state for.
+        self.stop_handler: "handlers.StopHandler" = None
+        self.start_handler: "handlers.StartHandler" = None
+        self.connect_handler: "handlers.ConnectHandler" = None
+        self.disconnect_handler: "handlers.DisconnectHandler" = None
+        self.dispatcher = Dispatcher(self)
+        self._pending_asks: dict[str, asyncio.Future] = {}
+        self._pending_filters: dict[str, Optional[Filter]] = {}
+        self._default_timeout = 60
+        self._ask_manager = None
 
-        Returns:
-            State:
-                State object for managing user-specific data.
+    def __enter__(self) -> "Client":
+        self.start()
+        return self
 
-        Example:
-            # Get user state
-            user_state = client.state("user_123456")
+    def __exit__(self, *args):
+        try:
+            self.stop()
+        except ConnectionError:
+            pass
 
-            # Set state data
-            user_state.set("language", "fa")
-            user_state.set("step", "waiting_for_name")
-
-            # Get state data
-            language = user_state.get("language")
-
-            # Clear state
-            user_state.clear()
-        """
-        return State(self.storage, user_id)
-
-    async def start(self):
-        """
-        Start the client and initialize connections.
-
-        This method:
-        1. Establishes HTTP connection pool
-        2. Executes registered start handlers
-        3. Prepares the client for receiving updates
-
-        Note:
-            - Automatically called by context manager and run() method
-            - Start handlers can be used for initialization tasks
-            - HTTP session is created with configured timeouts and limits
-        """
-        await self.http.connect()
-        for app in self.start_handlers:
-            try:
-                await app(self)
-            except Exception as error:
-                logger.warning("Error to run start handler: %s", error)
-
-    async def stop(self):
-        """
-        Stop the client and clean up resources.
-
-        This method:
-        1. Closes HTTP connections
-        2. Executes registered stop handlers
-        3. Performs cleanup tasks
-
-        Note:
-            - Automatically called by context manager and on shutdown
-            - Stop handlers can be used for cleanup tasks
-            - Ensures proper resource release
-        """
-        await self.http.disconnect()
-        for app in self.stop_handlers:
-            try:
-                await app(self)
-            except Exception as error:
-                logger.warning("Error to run stop handler: %s", error)
-
-    async def __aenter__(self):
-        """
-        Async context manager entry.
-
-        Automatically calls start() when entering context.
-
-        Returns:
-            Client: The started client instance.
-
-        Example:
-            async with Client("TOKEN") as bot:
-                # Client is automatically started
-                await bot.send_message("chat_id", "Hello")
-            # Client is automatically stopped
-        """
+    async def __aenter__(self) -> "Client":
         await self.start()
         return self
 
     async def __aexit__(self, *args):
-        """
-        Async context manager exit.
+        try:
+            await self.stop()
+        except ConnectionError:
+            pass
 
-        Automatically calls stop() when exiting context.
-        """
-        await self.stop()
+    @property
+    def ask(self):
+        if self._ask_manager is None:
+            from rubigram.ask import AskManager
+            self._ask_manager = AskManager(self)
+        return self._ask_manager
+
+    async def login(self) -> "types.User":
+        print(f"Welcome to Rubigram (version ...)")  # Set version
+
+        while True:
+            try:
+                if not self.phone_number:
+                    while True:
+                        phone = ainput("Enter phone number: ", loop=self.loop)
+
+                        if not phone:
+                            continue
+
+                        confirm = await ainput(f'Is {phone} correct? (Y/N): ', loop=self.loop)
+
+                        if confirm.lower() == "y":
+                            break
+
+                    self.phone_number = phone
+
+                while True:
+                    try:
+                        sent_code = await self.send_code(phone, self.password)
+                        if sent_code.status == enums.SentCodeStatus.OK:
+                            break
+
+                    except errors.SendPassword:
+                        while True:
+                            self.password = ainput(
+                                f"Enter 2FA password ({sent_code.hint_pass_key}): ", hide=self.hide_password, loop=self.loop
+                            )
+
+                            if self.password:
+                                break
+
+                    except errors.InvalidPassword:
+                        while True:
+                            password = ainput(
+                                f"Pssword is wrong, Enter the correct password: ", hide=self.hide_password, loop=self.loop
+                            )
+
+                            if password:
+                                self.password = password
+                                break
+
+                while True:
+                    code = ainput(
+                        f"Enter login code: ", loop=self.loop
+                    )
+
+                    if code and code.isdigit():
+                        break
+
+                try:
+                    sign_in = await self.sign_in(self.phone_number, code, sent_code.phone_code_hash)
+                    if sign_in.status == enums.SignInStatus.OK:
+                        break
+
+                except errors.CodeIsInvalid:
+                    ...
+
+                except errors.CodeIsExpired:
+                    ...
+
+                except errors.CodeIsInvalid:
+                    ...
+            except:
+                pass
+
+    def load_plugins(self):
+        if self.plugins:
+            plugins = self.plugins.copy()
+
+            for option in ["include", "exclude"]:
+                if plugins.get(option, []):
+                    plugins[option] = [
+                        (i.split()[0], i.split()[1:] or None)
+                        for i in self.plugins[option]
+                    ]
+        else:
+            return
+
+        if plugins.get("enabled", True):
+            root = plugins["root"]
+            include = plugins.get("include", [])
+            exclude = plugins.get("exclude", [])
+
+            count = 0
+
+            if not include:
+                for path in sorted(Path(root.replace(".", "/")).rglob("*.py")):
+                    module_path = '.'.join(path.parent.parts + (path.stem,))
+                    module = import_module(module_path)
+
+                    for name in vars(module).keys():
+                        # noinspection PyBroadException
+                        try:
+                            for handler, group in getattr(module, name).handlers:
+                                if isinstance(handler, Handler) and isinstance(group, int):
+                                    self.add_handler(handler, group)
+
+                                    logger.info('[{}] [LOAD] {}("{}") in group {} from "{}"'.format(
+                                        self.name, type(handler).__name__, name, group, module_path))
+
+                                    count += 1
+                        except Exception:
+                            pass
+            else:
+                for path, handlers in include:
+                    module_path = root + "." + path
+                    warn_non_existent_functions = True
+
+                    try:
+                        module = import_module(module_path)
+                    except ImportError:
+                        logger.warning(
+                            '[%s] [LOAD] Ignoring non-existent module "%s"', self.name, module_path)
+                        continue
+
+                    if "__path__" in dir(module):
+                        logger.warning(
+                            '[%s] [LOAD] Ignoring namespace "%s"', self.name, module_path)
+                        continue
+
+                    if handlers is None:
+                        handlers = vars(module).keys()
+                        warn_non_existent_functions = False
+
+                    for name in handlers:
+                        # noinspection PyBroadException
+                        try:
+                            for handler, group in getattr(module, name).handlers:
+                                if isinstance(handler, Handler) and isinstance(group, int):
+                                    self.add_handler(handler, group)
+
+                                    logger.info('[{}] [LOAD] {}("{}") in group {} from "{}"'.format(
+                                        self.name, type(handler).__name__, name, group, module_path))
+
+                                    count += 1
+                        except Exception:
+                            if warn_non_existent_functions:
+                                logger.warning('[{}] [LOAD] Ignoring non-existent function "{}" from "{}"'.format(
+                                    self.name, name, module_path))
+
+            if exclude:
+                for path, handlers in exclude:
+                    module_path = root + "." + path
+                    warn_non_existent_functions = True
+
+                    try:
+                        module = import_module(module_path)
+                    except ImportError:
+                        logger.warning(
+                            '[%s] [UNLOAD] Ignoring non-existent module "%s"', self.name, module_path)
+                        continue
+
+                    if "__path__" in dir(module):
+                        logger.warning(
+                            '[%s] [UNLOAD] Ignoring namespace "%s"', self.name, module_path)
+                        continue
+
+                    if handlers is None:
+                        handlers = vars(module).keys()
+                        warn_non_existent_functions = False
+
+                    for name in handlers:
+                        # noinspection PyBroadException
+                        try:
+                            for handler, group in getattr(module, name).handlers:
+                                if isinstance(handler, Handler) and isinstance(group, int):
+                                    self.remove_handler(handler, group)
+
+                                    logger.info('[{}] [UNLOAD] {}("{}") from group {} in "{}"'.format(
+                                        self.name, type(handler).__name__, name, group, module_path))
+
+                                    count -= 1
+                        except Exception:
+                            if warn_non_existent_functions:
+                                logger.warning('[{}] [UNLOAD] Ignoring non-existent function "{}" from "{}"'.format(
+                                    self.name, name, module_path))
+
+            if count > 0:
+                logger.info('[{}] Successfully loaded {} plugin{} from "{}"'.format(
+                    self.name, count, "s" if count > 1 else "", root))
+            else:
+                logger.warning('[%s] No plugin loaded from "%s"',
+                               self.name, root)

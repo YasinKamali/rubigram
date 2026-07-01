@@ -1,0 +1,13 @@
+#  RubigramClient - Rubika API library for python
+#  Copyright (C) 2025-present Javad <https://github.com/DevJavad>
+#  Github - https://github.com/DevJavad/rubigram
+
+
+from enum import Enum
+
+
+class ChatType(Enum):
+    USER = "User"
+    BOT = "Bot"
+    GROUP = "Group"
+    CHANNEL = "Channel"

@@ -1,14 +1,7 @@
-#  RubigramClient - Rubika API library for python
-#  Copyright (C) 2025-present Javad <https://github.com/DevJavad>
-#  Github - https://github.com/DevJavad/rubigram
-
-
-from .set_command import SetCommands
-from .update_bot_endpoint import UpdateBotEndpoints
+from .update_profile import UpdateProfile
 
 
 class Settings(
-    SetCommands,
-    UpdateBotEndpoints
+    UpdateProfile
 ):
     pass
